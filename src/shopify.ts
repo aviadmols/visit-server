@@ -1,0 +1,186 @@
+/**
+ * The three Admin API calls this service makes.
+ *
+ * A quote becomes a draft order: it holds the kit, the quantity and the answers, and its
+ * invoice URL is a checkout the customer can pay, which is what the email links to.
+ */
+
+import { config } from "./config.ts";
+
+const endpoint = `https://${config.shopify.shop}/admin/api/${config.shopify.apiVersion}/graphql.json`;
+
+export class ShopifyError extends Error {
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "ShopifyError";
+    this.code = code;
+  }
+}
+
+type UserError = { field?: string[] | null; message: string };
+
+async function graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": config.shopify.token,
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    throw new ShopifyError("shopify_unreachable", "Shopify did not answer in time.");
+  }
+
+  const body = (await response.json().catch(() => null)) as { data?: T; errors?: { message: string }[] } | null;
+
+  if (!response.ok || !body) {
+    throw new ShopifyError(`shopify_http_${response.status}`, `Shopify replied ${response.status}.`);
+  }
+  if (body.errors?.length) {
+    throw new ShopifyError("shopify_query_failed", body.errors.map((error) => error.message).join("; "));
+  }
+  if (!body.data) {
+    throw new ShopifyError("shopify_empty_response", "Shopify returned no data.");
+  }
+
+  return body.data;
+}
+
+function firstUserError(errors: UserError[] | undefined): string {
+  const error = errors?.[0];
+  if (!error) return "";
+
+  return [error.field?.join("."), error.message].filter(Boolean).join(": ");
+}
+
+export type Money = { amount: string; currencyCode: string };
+
+export type DraftOrder = {
+  id: string;
+  name: string;
+  invoiceUrl: string;
+  total: Money;
+  line: { title: string; quantity: number; unitPrice: Money } | null;
+};
+
+const DRAFT_ORDER_CREATE = `
+  mutation CreateQuote($input: DraftOrderInput!) {
+    draftOrderCreate(input: $input) {
+      draftOrder {
+        id
+        name
+        invoiceUrl
+        totalPriceSet { shopMoney { amount currencyCode } }
+        lineItems(first: 1) {
+          nodes {
+            title
+            quantity
+            originalUnitPriceSet { shopMoney { amount currencyCode } }
+          }
+        }
+      }
+      userErrors { field message }
+    }
+  }
+`;
+
+type DraftOrderCreateData = {
+  draftOrderCreate: {
+    draftOrder: {
+      id: string;
+      name: string;
+      invoiceUrl: string | null;
+      totalPriceSet: { shopMoney: Money };
+      lineItems: { nodes: { title: string; quantity: number; originalUnitPriceSet: { shopMoney: Money } }[] };
+    } | null;
+    userErrors: UserError[];
+  };
+};
+
+export type DraftOrderRequest = {
+  email: string;
+  variantId: string;
+  quantity: number;
+  note: string;
+  attributes: { key: string; value: string }[];
+};
+
+export async function createDraftOrder(request: DraftOrderRequest): Promise<DraftOrder> {
+  const data = await graphql<DraftOrderCreateData>(DRAFT_ORDER_CREATE, {
+    input: {
+      email: request.email,
+      lineItems: [{ variantId: request.variantId, quantity: request.quantity }],
+      customAttributes: request.attributes,
+      note: request.note,
+      tags: config.shopify.draftOrderTags,
+    },
+  });
+
+  const result = data.draftOrderCreate;
+  const draft = result.draftOrder;
+  if (!draft) {
+    throw new ShopifyError("draft_order_rejected", firstUserError(result.userErrors) || "Shopify refused the draft order.");
+  }
+  if (!draft.invoiceUrl) {
+    throw new ShopifyError("draft_order_without_invoice", "The draft order has no invoice URL to pay.");
+  }
+
+  const line = draft.lineItems.nodes[0];
+
+  return {
+    id: draft.id,
+    name: draft.name,
+    invoiceUrl: draft.invoiceUrl,
+    total: draft.totalPriceSet.shopMoney,
+    line: line ? { title: line.title, quantity: line.quantity, unitPrice: line.originalUnitPriceSet.shopMoney } : null,
+  };
+}
+
+const CUSTOMER_BY_EMAIL = `
+  query CustomerByEmail($query: String!) {
+    customers(first: 1, query: $query) {
+      nodes { id }
+    }
+  }
+`;
+
+/** @returns The customer's id, or null when this email has never bought or signed up. */
+export async function findCustomerId(email: string): Promise<string | null> {
+  const data = await graphql<{ customers: { nodes: { id: string }[] } }>(CUSTOMER_BY_EMAIL, {
+    query: `email:"${email.replace(/"/g, "")}"`,
+  });
+
+  return data.customers.nodes[0]?.id ?? null;
+}
+
+const METAFIELDS_SET = `
+  mutation SetQuoteLink($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Points the customer's metafield at their newest quote. */
+export async function setCustomerQuoteLink(customerId: string, invoiceUrl: string): Promise<void> {
+  const data = await graphql<{ metafieldsSet: { userErrors: UserError[] } }>(METAFIELDS_SET, {
+    metafields: [
+      {
+        ownerId: customerId,
+        namespace: config.shopify.metafield.namespace,
+        key: config.shopify.metafield.key,
+        type: config.shopify.metafield.type,
+        value: invoiceUrl,
+      },
+    ],
+  });
+
+  const message = firstUserError(data.metafieldsSet.userErrors);
+  if (message) throw new ShopifyError("metafield_rejected", message);
+}
