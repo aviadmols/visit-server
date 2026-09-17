@@ -21,20 +21,74 @@ export class ShopifyError extends Error {
 
 type UserError = { field?: string[] | null; message: string };
 
-async function graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+/** The day-long token of a Dev Dashboard app, renewed a few minutes before Shopify expires it. */
+let issued: { token: Promise<string>; renewAt: number } | null = null;
+const RENEW_EARLY_MS = 5 * 60 * 1000;
+
+async function requestToken(clientId: string, clientSecret: string): Promise<{ token: string; lifetimeMs: number }> {
+  let response: Response;
+  try {
+    response = await fetch(`https://${config.shopify.shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    throw new ShopifyError("shopify_unreachable", "Shopify did not answer the token request in time.");
+  }
+
+  const body = (await response.json().catch(() => null)) as { access_token?: string; expires_in?: number } | null;
+  if (!response.ok || !body?.access_token) {
+    throw new ShopifyError("shopify_auth_failed", `Shopify refused the client credentials (${response.status}).`);
+  }
+
+  return { token: body.access_token, lifetimeMs: (body.expires_in ?? 86399) * 1000 };
+}
+
+async function accessToken(): Promise<string> {
+  const auth = config.shopify.auth;
+  if ("token" in auth) return auth.token;
+
+  if (!issued || Date.now() >= issued.renewAt) {
+    // Requests that arrive together share one token request instead of each asking for their own.
+    const pending = requestToken(auth.clientId, auth.clientSecret);
+    const current = { token: pending.then((result) => result.token), renewAt: Infinity };
+    issued = current;
+
+    pending.then(
+      (result) => { current.renewAt = Date.now() + result.lifetimeMs - RENEW_EARLY_MS; },
+      () => { if (issued === current) issued = null; }
+    );
+
+    return current.token;
+  }
+
+  return issued.token;
+}
+
+async function graphql<T>(query: string, variables: Record<string, unknown>, retried = false): Promise<T> {
+  const token = await accessToken();
+
   let response: Response;
   try {
     response = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Shopify-Access-Token": config.shopify.token,
+        "X-Shopify-Access-Token": token,
       },
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(15000),
     });
   } catch {
     throw new ShopifyError("shopify_unreachable", "Shopify did not answer in time.");
+  }
+
+  // A token revoked early (the app reinstalled, the secret rotated) is replaced once.
+  if (response.status === 401 && !retried && !("token" in config.shopify.auth)) {
+    issued = null;
+    return graphql<T>(query, variables, true);
   }
 
   const body = (await response.json().catch(() => null)) as { data?: T; errors?: { message: string }[] } | null;
@@ -183,4 +237,10 @@ export async function setCustomerQuoteLink(customerId: string, invoiceUrl: strin
 
   const message = firstUserError(data.metafieldsSet.userErrors);
   if (message) throw new ShopifyError("metafield_rejected", message);
+}
+
+/** @returns The shop's name, which proves the credentials and the shop domain belong together. */
+export async function shopName(): Promise<string> {
+  const data = await graphql<{ shop: { name: string } }>(`query { shop { name } }`, {});
+  return data.shop.name;
 }

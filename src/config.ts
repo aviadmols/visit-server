@@ -28,6 +28,24 @@ function list(name: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * How the service signs in to the Admin API.
+ *
+ * Apps built in the Dev Dashboard (every new app since January 2026) hand out a client id and
+ * secret, which the service trades for a token that lasts a day. A legacy custom app, created
+ * in admin before then, has a fixed shpat_ token instead. Either one is enough.
+ */
+function shopifyAuth(): { clientId: string; clientSecret: string } | { token: string } {
+  const clientId = optional("SHOPIFY_CLIENT_ID");
+  const clientSecret = optional("SHOPIFY_CLIENT_SECRET");
+  if (clientId && clientSecret) return { clientId, clientSecret };
+
+  const token = optional("SHOPIFY_ADMIN_TOKEN");
+  if (token) return { token };
+
+  throw new Error("Missing environment variables: SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET, or SHOPIFY_ADMIN_TOKEN");
+}
+
 export const config = {
   port: number("PORT", 3000),
 
@@ -40,8 +58,7 @@ export const config = {
   shopify: {
     /** my-shop.myshopify.com, without the scheme. */
     shop: required("SHOPIFY_SHOP").replace(/^https?:\/\//, "").replace(/\/+$/, ""),
-    /** Admin API access token of the custom app (shpat_...). */
-    token: required("SHOPIFY_ADMIN_TOKEN"),
+    auth: shopifyAuth(),
     apiVersion: optional("SHOPIFY_API_VERSION", "2026-07"),
     /** Where the link to the customer's latest quote is stored. */
     metafield: {

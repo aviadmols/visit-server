@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { config } from "./config.ts";
 import { log, flushLog } from "./log.ts";
 import { handleQuote, RequestError, type QuoteResult } from "./quote.ts";
-import { ShopifyError } from "./shopify.ts";
+import { shopName, ShopifyError } from "./shopify.ts";
 
 /** Bigger than any quiz payload, small enough that a stray upload cannot fill memory. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -154,6 +154,12 @@ const server = createServer((request, response) => {
 
 server.listen(config.port, () => {
   log("service_started", { port: config.port, shop: config.shopify.shop, apiVersion: config.shopify.apiVersion });
+
+  // Proves the Shopify credentials at boot, so a wrong secret shows in the deploy log and not on a customer's quote.
+  shopName().then(
+    (name) => log("shopify_connected", { shop: config.shopify.shop, name, auth: "token" in config.shopify.auth ? "admin_token" : "client_credentials" }),
+    (error) => log("shopify_connection_failed", { shop: config.shopify.shop, code: error instanceof ShopifyError ? error.code : "unknown", message: String(error) })
+  );
 });
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {

@@ -15,7 +15,8 @@ that is down is recorded and reported back, never a reason to lose a quote Shopi
 ## Requirements
 
 - Node 22.9 or newer (Node runs the TypeScript directly in development; production runs the build).
-- A Shopify custom app with the scopes `write_draft_orders`, `read_customers`, `write_customers`.
+- A Shopify app on the store with the scopes `write_draft_orders`, `read_customers`, `write_customers`
+  (see [Giving the service access to the store](#giving-the-service-access-to-the-store)).
 - An SMTP account for the outgoing email.
 
 ## Setup
@@ -31,6 +32,28 @@ For development, `npm run dev` restarts on every change and needs no build step.
 
 Every setting lives in `.env` and is read once at boot; a missing credential stops the service
 immediately rather than failing on the first quote. See `.env.example` for the full list.
+
+### Giving the service access to the store
+
+Since January 2026 Shopify no longer lets a store create a custom app with a fixed `shpat_`
+token. The app is built in the Dev Dashboard instead, and the service signs in with the app's
+client id and secret, trading them for a token that lasts 24 hours and renewing it on its own.
+This only works when the app and the store belong to the same Shopify organization, so the app
+is created from the store's own admin, by the owner or a staff member with the
+*App development → Develop* permission:
+
+1. In admin, **Settings → Apps → Develop apps → Build apps in Dev Dashboard**, then **Create app**.
+2. In the new version, set the **App URL** to this service's public URL, turn off embedding in
+   the admin, and under **Access** enter the scopes `write_draft_orders,read_customers,write_customers`.
+3. **Release** the version, then open the app's **Installs** section and **Install app** on the store.
+4. From the app's **Settings**, copy the **Client ID** and **Client secret** into
+   `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET`.
+
+A legacy custom app created in admin before January 2026 still works: leave the client values
+empty and put its token in `SHOPIFY_ADMIN_TOKEN`.
+
+At boot the service asks Shopify for the shop's name and logs `shopify_connected` or
+`shopify_connection_failed`, so a wrong secret or a missing install shows in the deploy log.
 
 ### The customer metafield
 
