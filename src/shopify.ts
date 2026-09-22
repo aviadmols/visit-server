@@ -25,6 +25,18 @@ type UserError = { field?: string[] | null; message: string };
 let issued: { token: Promise<string>; renewAt: number } | null = null;
 const RENEW_EARLY_MS = 5 * 60 * 1000;
 
+/** The permanent token an install handshake produced. Lives until the process restarts. */
+let installed: string | null = null;
+
+export function setInstalledToken(token: string): void {
+  installed = token;
+  issued = null;
+}
+
+export function hasInstalledToken(): boolean {
+  return installed !== null;
+}
+
 async function requestToken(clientId: string, clientSecret: string): Promise<{ token: string; lifetimeMs: number }> {
   let response: Response;
   try {
@@ -40,7 +52,8 @@ async function requestToken(clientId: string, clientSecret: string): Promise<{ t
 
   const body = (await response.json().catch(() => null)) as { access_token?: string; expires_in?: number } | null;
   if (!response.ok || !body?.access_token) {
-    throw new ShopifyError("shopify_auth_failed", `Shopify refused the client credentials (${response.status}).`);
+    // Shopify answers 400 when the app and the store are not in one organization; the install handshake covers that case.
+    throw new ShopifyError("shopify_auth_failed", `Shopify refused the client credentials (${response.status}). If the app is not in the store's own organization, install it at ${config.publicUrl}/auth/install.`);
   }
 
   return { token: body.access_token, lifetimeMs: (body.expires_in ?? 86399) * 1000 };
@@ -49,6 +62,7 @@ async function requestToken(clientId: string, clientSecret: string): Promise<{ t
 async function accessToken(): Promise<string> {
   const auth = config.shopify.auth;
   if ("token" in auth) return auth.token;
+  if (installed) return installed;
 
   if (!issued || Date.now() >= issued.renewAt) {
     // Requests that arrive together share one token request instead of each asking for their own.
@@ -86,7 +100,7 @@ async function graphql<T>(query: string, variables: Record<string, unknown>, ret
   }
 
   // A token revoked early (the app reinstalled, the secret rotated) is replaced once.
-  if (response.status === 401 && !retried && !("token" in config.shopify.auth)) {
+  if (response.status === 401 && !retried && !("token" in config.shopify.auth) && !installed) {
     issued = null;
     return graphql<T>(query, variables, true);
   }

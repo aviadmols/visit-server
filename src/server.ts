@@ -11,7 +11,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { config } from "./config.ts";
 import { log, flushLog } from "./log.ts";
 import { handleQuote, RequestError, type QuoteResult } from "./quote.ts";
-import { shopName, ShopifyError } from "./shopify.ts";
+import { authorizeUrl, completeInstall, InstallError } from "./oauth.ts";
+import { hasInstalledToken, shopName, ShopifyError } from "./shopify.ts";
 
 /** Bigger than any quiz payload, small enough that a stray upload cannot fill memory. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -106,9 +107,45 @@ async function submissions(request: IncomingMessage, response: ServerResponse, h
   }
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] as string);
+}
+
+function page(response: ServerResponse, status: number, title: string, body: string): void {
+  const html = `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title><body style="font:16px/1.5 system-ui;max-width:40rem;margin:3rem auto;padding:0 1rem"><h1>${escapeHtml(title)}</h1>${body}`;
+  response.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  response.end(html);
+}
+
+/** The install handshake: /auth/install sends the owner to Shopify, /auth/callback receives the answer. */
+async function install(path: string, query: URLSearchParams, response: ServerResponse): Promise<boolean> {
+  if (path === "/auth/install") {
+    response.writeHead(302, { Location: authorizeUrl(), "Cache-Control": "no-store" });
+    response.end();
+    return true;
+  }
+
+  if (path !== "/auth/callback") return false;
+
+  try {
+    const { token, scope } = await completeInstall(query);
+    log("app_installed", { shop: config.shopify.shop, scope });
+    page(response, 200, "Installed on " + config.shopify.shop, `
+      <p>Quotes work from now on. To keep working after a restart, save this token in Railway as <code>SHOPIFY_ADMIN_TOKEN</code> and deploy:</p>
+      <p><code style="word-break:break-all;user-select:all">${escapeHtml(token)}</code></p>
+      <p>Granted scopes: <code>${escapeHtml(scope)}</code></p>`);
+  } catch (error) {
+    const message = error instanceof InstallError ? error.message : "The install could not be completed.";
+    log("app_install_failed", { message: String(error) });
+    page(response, 400, "Install failed", `<p>${escapeHtml(message)}</p><p><a href="/auth/install">Try again</a></p>`);
+  }
+
+  return true;
+}
+
 const server = createServer((request, response) => {
   const headers = corsHeaders(request.headers.origin);
-  const path = (request.url || "/").split("?")[0];
+  const [path = "/", search = ""] = (request.url || "/").split("?");
 
   void (async () => {
     const started = Date.now();
@@ -121,9 +158,11 @@ const server = createServer((request, response) => {
       }
 
       if (request.method === "GET" && path === "/health") {
-        send(response, 200, { ok: true, shop: config.shopify.shop }, headers);
+        send(response, 200, { ok: true, shop: config.shopify.shop, installed: hasInstalledToken() }, headers);
         return;
       }
+
+      if (request.method === "GET" && (await install(path, new URLSearchParams(search), response))) return;
 
       if (config.apiToken && request.headers["x-quote-token"] !== config.apiToken) {
         send(response, 401, { error_code: "unauthorized", message: "Wrong or missing token." }, headers);

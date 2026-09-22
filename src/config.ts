@@ -49,6 +49,9 @@ function shopifyAuth(): { clientId: string; clientSecret: string } | { token: st
 export const config = {
   port: number("PORT", 3000),
 
+  /** Where the service is reachable from outside, for the install redirect. Railway supplies it. */
+  publicUrl: (optional("PUBLIC_URL") || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "")).replace(/\/+$/, ""),
+
   /** Storefront origins allowed to post a quote. Empty means any origin. */
   allowedOrigins: list("ALLOWED_ORIGINS"),
 
@@ -59,6 +62,8 @@ export const config = {
     /** my-shop.myshopify.com, without the scheme. */
     shop: required("SHOPIFY_SHOP").replace(/^https?:\/\//, "").replace(/\/+$/, ""),
     auth: shopifyAuth(),
+    /** What the install asks the store for. Must match the app's version in the Dev Dashboard. */
+    scopes: optional("SHOPIFY_SCOPES", "write_draft_orders,read_customers,write_customers"),
     apiVersion: optional("SHOPIFY_API_VERSION", "2026-07"),
     /** Where the link to the customer's latest quote is stored. */
     metafield: {

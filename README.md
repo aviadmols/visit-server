@@ -52,6 +52,19 @@ is created from the store's own admin, by the owner or a staff member with the
 A legacy custom app created in admin before January 2026 still works: leave the client values
 empty and put its token in `SHOPIFY_ADMIN_TOKEN`.
 
+#### An app from a Partner account
+
+When the app is created in a Partner (or any other) organization, Shopify answers the client
+credentials with `400`, and the store has to install the app instead:
+
+1. In the app's version, add `https://<service>/auth/callback` under **Redirect URLs** and release it.
+2. Choose **Custom distribution** for the store, then open `https://<service>/auth/install` and
+   approve the app in the store's admin.
+3. The page that follows shows the store's permanent token. Save it as `SHOPIFY_ADMIN_TOKEN`
+   and deploy, or the service forgets it on the next restart.
+
+`PUBLIC_URL` is the service's own address for that redirect; Railway sets it automatically.
+
 At boot the service asks Shopify for the shop's name and logs `shopify_connected` or
 `shopify_connection_failed`, so a wrong secret or a missing install shows in the deploy log.
 
