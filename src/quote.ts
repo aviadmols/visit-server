@@ -27,6 +27,8 @@ export class RequestError extends Error {
 
 /** The fields this service uses out of the quiz payload. The rest is carried, not read. */
 type QuotePayload = {
+  /** "checkout" when the customer is on their way to pay, so the email can be skipped. */
+  action_type: "quote" | "checkout";
   work_email: string;
   first_name: string;
   last_name: string;
@@ -95,6 +97,7 @@ function read(body: unknown): QuotePayload {
   }
 
   return {
+    action_type: text(source.action_type) === "checkout" ? "checkout" : "quote",
     work_email: email,
     first_name: text(source.first_name),
     last_name: text(source.last_name),
@@ -118,6 +121,7 @@ function read(body: unknown): QuotePayload {
 /** The answers, written the way they should read on the order in admin. */
 function attributes(quote: QuotePayload): { key: string; value: string }[] {
   const pairs: Record<string, string> = {
+    Action: quote.action_type === "checkout" ? "Continued to checkout" : "Asked for a quote",
     Participants: String(quote.participant_count),
     Causes: quote.impact_categories.join(", "),
     "Budget per participant": quote.budget_per_participant,
@@ -134,28 +138,42 @@ function attributes(quote: QuotePayload): { key: string; value: string }[] {
     .map(([key, value]) => ({ key, value }));
 }
 
-export type QuoteResult = { submission_id: string; integration_status: string };
+export type QuoteResult = {
+  submission_id: string;
+  integration_status: string;
+  /** The draft order's checkout, which opens with the customer's email already filled in. */
+  invoice_url: string;
+};
 
 export async function handleQuote(body: unknown): Promise<QuoteResult> {
   const quote = read(body);
   const name = [quote.first_name, quote.last_name].filter(Boolean).join(" ");
+  const who = `${name || quote.work_email}${quote.company_name ? ` (${quote.company_name})` : ""}`;
+  const checkout = quote.action_type === "checkout";
 
   const draft = await createDraftOrder({
     email: quote.work_email,
     variantId: quote.selected_variant_id,
     quantity: quote.participant_count,
-    note: `Impact Kit quiz quote for ${name || quote.work_email}${quote.company_name ? ` (${quote.company_name})` : ""}.`,
+    note: checkout ? `Impact Kit quiz checkout for ${who}.` : `Impact Kit quiz quote for ${who}.`,
     attributes: attributes(quote),
   });
 
-  log("draft_order_created", { draft: draft.name, email: quote.work_email, participants: quote.participant_count });
+  log("draft_order_created", { draft: draft.name, email: quote.work_email, participants: quote.participant_count, action: quote.action_type });
 
   const linked = await linkCustomer(quote.work_email, draft.invoiceUrl);
+
+  // On the way to pay, the invoice is the answer; an email as well would only interrupt.
+  if (checkout) {
+    return { submission_id: draft.name, integration_status: linked ? "checkout_ready" : "checkout_ready_customer_unlinked", invoice_url: draft.invoiceUrl };
+  }
+
   const emailed = await deliverEmail(quote, draft.name, draft.invoiceUrl, draft.line, draft.total);
 
   return {
     submission_id: draft.name,
     integration_status: emailed ? (linked ? "quote_sent" : "quote_sent_customer_unlinked") : "quote_created_email_failed",
+    invoice_url: draft.invoiceUrl,
   };
 }
 

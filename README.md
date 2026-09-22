@@ -91,11 +91,12 @@ Add the storefront origin to `ALLOWED_ORIGINS`, since the browser posts here cro
 | --- | --- | --- |
 | `GET` | `/health` | Liveness check. |
 | `POST` | `/api/quiz/match` | Answers `{}` on purpose. The quiz keeps the ranking it worked out in the browser, and this route exists so that configuring a service URL does not break the kits screen. |
-| `POST` | `/api/quiz/submissions` | The quote request. Returns `{ submission_id, integration_status }`. |
+| `POST` | `/api/quiz/submissions` | The quote request. Returns `{ submission_id, integration_status, invoice_url }`. With `action_type: "checkout"` the draft order is created but no email is sent, and the quiz sends the customer to `invoice_url`, a checkout that already carries their email. |
 
 `submission_id` is the draft order name, for example `#D42`. `integration_status` is one of
 `quote_sent`, `quote_sent_customer_unlinked` (no customer record for that email, or the metafield
-was refused) or `quote_created_email_failed` (the draft order exists, the email did not go out).
+was refused), `quote_created_email_failed` (the draft order exists, the email did not go out), or
+for a checkout `checkout_ready` / `checkout_ready_customer_unlinked`.
 
 Errors answer with `{ error_code, message }` and, when a field is at fault, `field_errors`, which
 is the shape the quiz already understands.
