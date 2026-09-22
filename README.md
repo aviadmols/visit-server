@@ -116,6 +116,13 @@ The payload is the quiz submission. Three fields are load bearing:
 Everything else (causes, budget, event date, company, delivery, UTM values) is carried onto the
 draft order as an attribute, so the order explains itself in admin.
 
+## Checking the mail relay
+
+`railway run node smtp-check.mjs you@example.com` sends one test message with the service's own
+SMTP settings and prints the relay's answer. Every `quote_email_sent` record also carries that
+answer (`response`, `messageId`), so a quote that was accepted by the relay but never arrived is
+a question for the relay or the recipient's spam filter, not for the service.
+
 ## Logging
 
 One JSON line per record, written to stdout and to `LOG_FILE`. The file is emptied as soon as it

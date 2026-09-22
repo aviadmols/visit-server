@@ -192,8 +192,9 @@ export function renderQuoteText(quote: QuoteEmail): string {
     .join("\n");
 }
 
-export async function sendQuoteEmail(quote: QuoteEmail): Promise<void> {
-  await transport().sendMail({
+/** @returns What the relay answered, for the log: delivery beyond the relay is its business. */
+export async function sendQuoteEmail(quote: QuoteEmail): Promise<{ response: string; messageId: string; rejected: string[] }> {
+  const info = await transport().sendMail({
     from: config.mail.from,
     to: quote.to,
     replyTo: config.mail.replyTo || undefined,
@@ -201,4 +202,6 @@ export async function sendQuoteEmail(quote: QuoteEmail): Promise<void> {
     text: renderQuoteText(quote),
     html: renderQuoteEmail(quote),
   });
+
+  return { response: info.response, messageId: info.messageId, rejected: info.rejected.map(String) };
 }

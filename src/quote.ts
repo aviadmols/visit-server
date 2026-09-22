@@ -204,7 +204,7 @@ async function deliverEmail(
   total: { amount: string; currencyCode: string }
 ): Promise<boolean> {
   try {
-    await sendQuoteEmail({
+    const relay = await sendQuoteEmail({
       to: quote.work_email,
       firstName: quote.first_name,
       quoteName,
@@ -218,7 +218,7 @@ async function deliverEmail(
       invoiceUrl,
     });
 
-    log("quote_email_sent", { to: quote.work_email, draft: quoteName });
+    log("quote_email_sent", { to: quote.work_email, draft: quoteName, ...relay });
     return true;
   } catch (error) {
     log("quote_email_failed", { to: quote.work_email, draft: quoteName, message: String(error) });
