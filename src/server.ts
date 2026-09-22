@@ -30,9 +30,18 @@ function remember(key: string, result: Promise<QuoteResult>): void {
   }
 }
 
+/** An entry such as https://*.shopifypreview.com covers theme previews, whose subdomain changes every time. */
+const allowedOriginPatterns = config.allowedOrigins.map(
+  (entry) => new RegExp(`^${entry.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[a-z0-9-]+")}$`, "i")
+);
+
+function originAllowed(origin: string): boolean {
+  return allowedOriginPatterns.some((pattern) => pattern.test(origin));
+}
+
 function corsHeaders(origin: string | undefined): Record<string, string> {
   const allowed = config.allowedOrigins;
-  const value = allowed.length === 0 ? "*" : origin && allowed.includes(origin) ? origin : "";
+  const value = allowed.length === 0 ? "*" : origin && originAllowed(origin) ? origin : "";
   if (!value) return {};
 
   return {
