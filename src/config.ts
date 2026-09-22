@@ -36,12 +36,14 @@ function list(name: string): string[] {
  * in admin before then, has a fixed shpat_ token instead. Either one is enough.
  */
 function shopifyAuth(): { clientId: string; clientSecret: string } | { token: string } {
+  // A fixed token is the explicit choice, and it is what an install handshake leaves behind,
+  // so it wins over client credentials that may also still be set.
+  const token = optional("SHOPIFY_ADMIN_TOKEN");
+  if (token) return { token };
+
   const clientId = optional("SHOPIFY_CLIENT_ID");
   const clientSecret = optional("SHOPIFY_CLIENT_SECRET");
   if (clientId && clientSecret) return { clientId, clientSecret };
-
-  const token = optional("SHOPIFY_ADMIN_TOKEN");
-  if (token) return { token };
 
   throw new Error("Missing environment variables: SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET, or SHOPIFY_ADMIN_TOKEN");
 }
