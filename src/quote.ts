@@ -253,7 +253,6 @@ async function deliverEmail(
       total,
       eventDate: quote.event_date,
       dateFlexible: quote.date_flexible,
-      causes: quote.impact_categories,
       invoiceUrl,
     });
 

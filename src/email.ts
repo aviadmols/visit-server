@@ -24,16 +24,7 @@ export type QuoteEmail = {
   total: Money;
   eventDate: string | null;
   dateFlexible: boolean;
-  causes: string[];
   invoiceUrl: string;
-};
-
-const CAUSE_LABELS: Record<string, string> = {
-  children_families: "Support children and families",
-  hunger: "Fight hunger and food insecurity",
-  health_dignity: "Promote health, hygiene and dignity",
-  learning: "Inspire learning and future skills",
-  crisis: "Respond to crisis and urgent needs",
 };
 
 const FONT = "'Heebo',Helvetica,Arial,sans-serif";
@@ -70,10 +61,6 @@ function humanDate(value: string | null, flexible: boolean): string {
   if (Number.isNaN(date.getTime())) return value;
 
   return new Intl.DateTimeFormat("en-US", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(date);
-}
-
-function causeNames(values: string[]): string {
-  return values.map((value) => CAUSE_LABELS[value] || value.replace(/_/g, " ")).join(", ");
 }
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
@@ -166,7 +153,7 @@ export function renderQuoteEmail(quote: QuoteEmail): string {
             </tr>${kitImage(quote)}
             <tr>
               <td>
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${row("Impact kit", quote.kitTitle)}${row("Participants", String(quote.participants))}${row("Per participant", money(quote.unitPrice))}${row("Total", money(quote.total))}${row("Event date", humanDate(quote.eventDate, quote.dateFlexible))}${row("Causes", causeNames(quote.causes))}
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${row("Impact kit", quote.kitTitle)}${row("Participants", String(quote.participants))}${row("Per participant", money(quote.unitPrice))}${row("Total", money(quote.total))}${row("Event date", humanDate(quote.eventDate, quote.dateFlexible))}
                 </table>
               </td>
             </tr>
@@ -205,7 +192,6 @@ export function renderQuoteText(quote: QuoteEmail): string {
     quote.unitPrice ? `Per participant: ${money(quote.unitPrice)}` : "",
     `Total: ${money(quote.total)}`,
     `Event date: ${humanDate(quote.eventDate, quote.dateFlexible)}`,
-    quote.causes.length > 0 ? `Causes: ${causeNames(quote.causes)}` : "",
     "",
     `Complete the order: ${quote.invoiceUrl}`,
     "",
