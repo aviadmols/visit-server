@@ -200,7 +200,7 @@ async function deliverEmail(
   quote: QuotePayload,
   quoteName: string,
   invoiceUrl: string,
-  line: { title: string; quantity: number; unitPrice: { amount: string; currencyCode: string } } | null,
+  line: { title: string; quantity: number; unitPrice: { amount: string; currencyCode: string }; imageUrl: string } | null,
   total: { amount: string; currencyCode: string }
 ): Promise<boolean> {
   try {
@@ -209,6 +209,7 @@ async function deliverEmail(
       firstName: quote.first_name,
       quoteName,
       kitTitle: line?.title || "Impact Kit",
+      kitImageUrl: line?.imageUrl || "",
       participants: quote.participant_count,
       unitPrice: line?.unitPrice ?? null,
       total,

@@ -134,7 +134,7 @@ export type DraftOrder = {
   name: string;
   invoiceUrl: string;
   total: Money;
-  line: { title: string; quantity: number; unitPrice: Money } | null;
+  line: { title: string; quantity: number; unitPrice: Money; imageUrl: string } | null;
 };
 
 const DRAFT_ORDER_CREATE = `
@@ -150,6 +150,8 @@ const DRAFT_ORDER_CREATE = `
             title
             quantity
             originalUnitPriceSet { shopMoney { amount currencyCode } }
+            image { url(transform: { maxWidth: 1200 }) }
+            product { featuredMedia { preview { image { url(transform: { maxWidth: 1200 }) } } } }
           }
         }
       }
@@ -165,7 +167,15 @@ type DraftOrderCreateData = {
       name: string;
       invoiceUrl: string | null;
       totalPriceSet: { shopMoney: Money };
-      lineItems: { nodes: { title: string; quantity: number; originalUnitPriceSet: { shopMoney: Money } }[] };
+      lineItems: {
+        nodes: {
+          title: string;
+          quantity: number;
+          originalUnitPriceSet: { shopMoney: Money };
+          image: { url: string } | null;
+          product: { featuredMedia: { preview: { image: { url: string } | null } | null } | null } | null;
+        }[];
+      };
     } | null;
     userErrors: UserError[];
   };
@@ -206,7 +216,15 @@ export async function createDraftOrder(request: DraftOrderRequest): Promise<Draf
     name: draft.name,
     invoiceUrl: draft.invoiceUrl,
     total: draft.totalPriceSet.shopMoney,
-    line: line ? { title: line.title, quantity: line.quantity, unitPrice: line.originalUnitPriceSet.shopMoney } : null,
+    line: line
+      ? {
+          title: line.title,
+          quantity: line.quantity,
+          unitPrice: line.originalUnitPriceSet.shopMoney,
+          // The variant's own picture when it has one, otherwise the kit's main picture.
+          imageUrl: line.image?.url || line.product?.featuredMedia?.preview?.image?.url || "",
+        }
+      : null,
   };
 }
 

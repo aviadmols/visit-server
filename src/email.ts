@@ -17,6 +17,8 @@ export type QuoteEmail = {
   firstName: string;
   quoteName: string;
   kitTitle: string;
+  /** The kit's picture, left out of the email when the product has none. */
+  kitImageUrl: string;
   participants: number;
   unitPrice: Money | null;
   total: Money;
@@ -108,6 +110,18 @@ function footerLinks(): string {
   return parts.join(" &middot; ");
 }
 
+/** The kit's picture at the width of the email, above the numbers it explains. */
+function kitImage(quote: QuoteEmail): string {
+  if (!quote.kitImageUrl) return "";
+
+  return `
+            <tr>
+              <td style="padding-bottom:40px;">
+                <img src="${escapeHtml(quote.kitImageUrl)}" alt="${escapeHtml(quote.kitTitle)}" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;border-radius:7px;">
+              </td>
+            </tr>`;
+}
+
 export function renderQuoteEmail(quote: QuoteEmail): string {
   const greeting = quote.firstName ? `Hi ${escapeHtml(quote.firstName)},` : "Hi,";
 
@@ -140,7 +154,7 @@ export function renderQuoteEmail(quote: QuoteEmail): string {
               <td style="padding-bottom:40px;font:300 18px/1.6 ${FONT};color:${INK};">
                 ${greeting} here is what your team asked for, priced and held in one order. The button below opens a checkout with the kit already in it.
               </td>
-            </tr>
+            </tr>${kitImage(quote)}
             <tr>
               <td>
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${row("Impact kit", quote.kitTitle)}${row("Participants", String(quote.participants))}${row("Per participant", money(quote.unitPrice))}${row("Total", money(quote.total))}${row("Event date", humanDate(quote.eventDate, quote.dateFlexible))}${row("Causes", causeNames(quote.causes))}
