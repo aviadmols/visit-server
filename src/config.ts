@@ -90,6 +90,8 @@ export const config = {
 
   brand: {
     name: optional("BRAND_NAME", "Visit.org"),
+    /** Shown at the top of the email in place of the name. About 170px wide; send a 2x file for sharp screens. */
+    logoUrl: optional("BRAND_LOGO_URL"),
     url: optional("BRAND_URL", ""),
     supportEmail: optional("BRAND_SUPPORT_EMAIL", ""),
   },

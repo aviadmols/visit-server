@@ -110,6 +110,15 @@ function footerLinks(): string {
   return parts.join(" &middot; ");
 }
 
+/** The logo when there is one, otherwise the brand's name set in type. */
+function brandMark(): string {
+  if (!config.brand.logoUrl) return escapeHtml(config.brand.name);
+
+  const logo = `<img src="${escapeHtml(config.brand.logoUrl)}" alt="${escapeHtml(config.brand.name)}" width="170" style="display:block;width:170px;height:auto;border:0;">`;
+
+  return config.brand.url ? `<a href="${escapeHtml(config.brand.url)}" style="text-decoration:none;">${logo}</a>` : logo;
+}
+
 /** The kit's picture at the width of the email, above the numbers it explains. */
 function kitImage(quote: QuoteEmail): string {
   if (!quote.kitImageUrl) return "";
@@ -140,7 +149,7 @@ export function renderQuoteEmail(quote: QuoteEmail): string {
         <td align="center" style="padding:48px 24px;">
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;">
             <tr>
-              <td style="padding-bottom:56px;font:900 13px/1 ${FONT};letter-spacing:4px;text-transform:uppercase;color:${INK};">${escapeHtml(config.brand.name)}</td>
+              <td style="padding-bottom:56px;font:900 13px/1 ${FONT};letter-spacing:4px;text-transform:uppercase;color:${INK};">${brandMark()}</td>
             </tr>
             <tr>
               <td style="padding-bottom:12px;font:500 11px/1 ${FONT};letter-spacing:4px;text-transform:uppercase;color:${MUTED};">Quote ${escapeHtml(quote.quoteName)}</td>
