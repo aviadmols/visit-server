@@ -9,7 +9,7 @@
 
 import { log } from "./log.ts";
 import { sendQuoteEmail } from "./email.ts";
-import { createDraftOrder, findCustomerId, setCustomerQuoteLink, ShopifyError } from "./shopify.ts";
+import { createDraftOrder, findCustomerId, lineImageUrl, setCustomerQuoteLink, ShopifyError } from "./shopify.ts";
 
 export class RequestError extends Error {
   code: string;
@@ -138,6 +138,32 @@ function attributes(quote: QuotePayload): { key: string; value: string }[] {
     .map(([key, value]) => ({ key, value }));
 }
 
+/**
+ * Every answer the quiz sent, as line item properties. The underscore is Shopify's convention
+ * for a property the customer never sees, so the whole brief travels with the kit into the
+ * order and only the store's staff read it.
+ */
+function lineProperties(body: Record<string, unknown>): { key: string; value: string }[] {
+  const properties: { key: string; value: string }[] = [];
+
+  for (const [key, raw] of Object.entries(body)) {
+    if (!/^[a-z0-9_]{1,80}$/i.test(key)) continue;
+
+    const value = Array.isArray(raw)
+      ? raw.filter((item) => typeof item === "string" || typeof item === "number").map(String).join(", ")
+      : typeof raw === "string"
+        ? raw.trim()
+        : typeof raw === "number" || typeof raw === "boolean"
+          ? String(raw)
+          : "";
+    if (value === "") continue;
+
+    properties.push({ key: `_${key}`, value: value.slice(0, 250) });
+  }
+
+  return properties;
+}
+
 export type QuoteResult = {
   submission_id: string;
   integration_status: string;
@@ -157,6 +183,7 @@ export async function handleQuote(body: unknown): Promise<QuoteResult> {
     quantity: quote.participant_count,
     note: checkout ? `Impact Kit quiz checkout for ${who}.` : `Impact Kit quiz quote for ${who}.`,
     attributes: attributes(quote),
+    properties: lineProperties(body as Record<string, unknown>),
   });
 
   log("draft_order_created", { draft: draft.name, email: quote.work_email, participants: quote.participant_count, action: quote.action_type });
@@ -168,13 +195,23 @@ export async function handleQuote(body: unknown): Promise<QuoteResult> {
     return { submission_id: draft.name, integration_status: linked ? "checkout_ready" : "checkout_ready_customer_unlinked", invoice_url: draft.invoiceUrl };
   }
 
-  const emailed = await deliverEmail(quote, draft.name, draft.invoiceUrl, draft.line, draft.total);
+  const emailed = await deliverEmail(quote, draft.name, draft.invoiceUrl, draft.line, draft.total, await kitImage(draft.id));
 
   return {
     submission_id: draft.name,
     integration_status: emailed ? (linked ? "quote_sent" : "quote_sent_customer_unlinked") : "quote_created_email_failed",
     invoice_url: draft.invoiceUrl,
   };
+}
+
+/** @returns The kit's picture for the email, or nothing when Shopify will not hand it over. */
+async function kitImage(draftOrderId: string): Promise<string> {
+  try {
+    return await lineImageUrl(draftOrderId);
+  } catch (error) {
+    log("kit_image_unavailable", { draft: draftOrderId, message: String(error) });
+    return "";
+  }
 }
 
 /** @returns Whether the customer record now points at this quote. */
@@ -200,8 +237,9 @@ async function deliverEmail(
   quote: QuotePayload,
   quoteName: string,
   invoiceUrl: string,
-  line: { title: string; quantity: number; unitPrice: { amount: string; currencyCode: string }; imageUrl: string } | null,
-  total: { amount: string; currencyCode: string }
+  line: { title: string; quantity: number; unitPrice: { amount: string; currencyCode: string } } | null,
+  total: { amount: string; currencyCode: string },
+  imageUrl: string
 ): Promise<boolean> {
   try {
     const relay = await sendQuoteEmail({
@@ -209,7 +247,7 @@ async function deliverEmail(
       firstName: quote.first_name,
       quoteName,
       kitTitle: line?.title || "Impact Kit",
-      kitImageUrl: line?.imageUrl || "",
+      kitImageUrl: imageUrl,
       participants: quote.participant_count,
       unitPrice: line?.unitPrice ?? null,
       total,

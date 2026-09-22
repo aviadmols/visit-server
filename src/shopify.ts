@@ -134,7 +134,7 @@ export type DraftOrder = {
   name: string;
   invoiceUrl: string;
   total: Money;
-  line: { title: string; quantity: number; unitPrice: Money; imageUrl: string } | null;
+  line: { title: string; quantity: number; unitPrice: Money } | null;
 };
 
 const DRAFT_ORDER_CREATE = `
@@ -150,8 +150,6 @@ const DRAFT_ORDER_CREATE = `
             title
             quantity
             originalUnitPriceSet { shopMoney { amount currencyCode } }
-            image { url(transform: { maxWidth: 1200 }) }
-            product { featuredMedia { preview { image { url(transform: { maxWidth: 1200 }) } } } }
           }
         }
       }
@@ -167,15 +165,7 @@ type DraftOrderCreateData = {
       name: string;
       invoiceUrl: string | null;
       totalPriceSet: { shopMoney: Money };
-      lineItems: {
-        nodes: {
-          title: string;
-          quantity: number;
-          originalUnitPriceSet: { shopMoney: Money };
-          image: { url: string } | null;
-          product: { featuredMedia: { preview: { image: { url: string } | null } | null } | null } | null;
-        }[];
-      };
+      lineItems: { nodes: { title: string; quantity: number; originalUnitPriceSet: { shopMoney: Money } }[] };
     } | null;
     userErrors: UserError[];
   };
@@ -186,14 +176,17 @@ export type DraftOrderRequest = {
   variantId: string;
   quantity: number;
   note: string;
+  /** Shown in admin under the order's additional details. */
   attributes: { key: string; value: string }[];
+  /** Line item properties; a key that starts with _ stays hidden from the customer. */
+  properties: { key: string; value: string }[];
 };
 
 export async function createDraftOrder(request: DraftOrderRequest): Promise<DraftOrder> {
   const data = await graphql<DraftOrderCreateData>(DRAFT_ORDER_CREATE, {
     input: {
       email: request.email,
-      lineItems: [{ variantId: request.variantId, quantity: request.quantity }],
+      lineItems: [{ variantId: request.variantId, quantity: request.quantity, customAttributes: request.properties }],
       customAttributes: request.attributes,
       note: request.note,
       tags: config.shopify.draftOrderTags,
@@ -216,16 +209,30 @@ export async function createDraftOrder(request: DraftOrderRequest): Promise<Draf
     name: draft.name,
     invoiceUrl: draft.invoiceUrl,
     total: draft.totalPriceSet.shopMoney,
-    line: line
-      ? {
-          title: line.title,
-          quantity: line.quantity,
-          unitPrice: line.originalUnitPriceSet.shopMoney,
-          // The variant's own picture when it has one, otherwise the kit's main picture.
-          imageUrl: line.image?.url || line.product?.featuredMedia?.preview?.image?.url || "",
-        }
-      : null,
+    line: line ? { title: line.title, quantity: line.quantity, unitPrice: line.originalUnitPriceSet.shopMoney } : null,
   };
+}
+
+const LINE_IMAGE = `
+  query QuoteLineImage($id: ID!) {
+    draftOrder(id: $id) {
+      lineItems(first: 1) {
+        nodes { image { url(transform: { maxWidth: 1200 }) } }
+      }
+    }
+  }
+`;
+
+/**
+ * The picture of the kit on the draft order, asked for separately so that a scope the app
+ * lacks can cost the email its picture but never the quote its draft order.
+ *
+ * @returns The image URL, or an empty string when the line has none.
+ */
+export async function lineImageUrl(draftOrderId: string): Promise<string> {
+  const data = await graphql<{ draftOrder: { lineItems: { nodes: { image: { url: string } | null }[] } } | null }>(LINE_IMAGE, { id: draftOrderId });
+
+  return data.draftOrder?.lineItems.nodes[0]?.image?.url ?? "";
 }
 
 const CUSTOMER_BY_EMAIL = `
