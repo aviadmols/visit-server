@@ -7,6 +7,7 @@
  * a quote that Shopify already holds.
  */
 
+import { config } from "./config.ts";
 import { log } from "./log.ts";
 import { sendQuoteEmail } from "./email.ts";
 import { createDraftOrder, findCustomerId, lineImageUrl, setCustomerQuoteLink, ShopifyError } from "./shopify.ts";
@@ -164,6 +165,17 @@ function lineProperties(body: Record<string, unknown>): { key: string; value: st
   return properties;
 }
 
+/**
+ * The quote number as the customer sees it: the draft order's digits behind a fixed prefix,
+ * so an early "#D15" reads as "#1115". Staff find the order by dropping the prefix.
+ */
+export function displayQuoteName(draftName: string): string {
+  const digits = draftName.replace(/\D/g, "");
+  if (!digits) return draftName;
+
+  return `#${config.mail.quoteNumberPrefix}${digits}`;
+}
+
 export type QuoteResult = {
   submission_id: string;
   integration_status: string;
@@ -245,7 +257,7 @@ async function deliverEmail(
     const relay = await sendQuoteEmail({
       to: quote.work_email,
       firstName: quote.first_name,
-      quoteName,
+      quoteName: displayQuoteName(quoteName),
       kitTitle: line?.title || "Impact Kit",
       kitImageUrl: imageUrl,
       participants: quote.participant_count,

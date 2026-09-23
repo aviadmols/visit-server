@@ -86,6 +86,8 @@ export const config = {
     from: required("MAIL_FROM"),
     replyTo: optional("MAIL_REPLY_TO"),
     subject: optional("MAIL_SUBJECT", "Your Impact Kit quote"),
+    /** Digits put in front of the draft order's number in the email, so #D15 reads as #1115. */
+    quoteNumberPrefix: optional("MAIL_QUOTE_NUMBER_PREFIX", "11"),
   },
 
   brand: {
