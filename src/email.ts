@@ -212,5 +212,5 @@ export async function sendQuoteEmail(quote: QuoteEmail): Promise<{ response: str
     html: renderQuoteEmail(quote),
   });
 
-  return { response: info.response, messageId: info.messageId, rejected: info.rejected.map(String) };
+  return { response: info.response ?? "", messageId: info.messageId, rejected: (info.rejected ?? []).map(String) };
 }
