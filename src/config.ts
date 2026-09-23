@@ -17,8 +17,13 @@ function optional(name: string, fallback = ""): string {
 }
 
 function number(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) ? value : fallback;
+  // An empty variable is a common accident in a dashboard, and Number("") is 0, which would
+  // quietly mean "any port" or "empty the log every line".
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function list(name: string): string[] {
@@ -59,6 +64,9 @@ export const config = {
 
   /** When set, a request must carry it as x-quote-token. */
   apiToken: optional("QUOTE_API_TOKEN"),
+
+  /** Quote requests one caller may make in ten minutes. A team quotes a handful at most. */
+  rateLimitPerWindow: number("RATE_LIMIT_PER_WINDOW", 12),
 
   shopify: {
     /** my-shop.myshopify.com, without the scheme. */

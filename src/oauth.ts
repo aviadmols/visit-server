@@ -13,7 +13,10 @@ import { config } from "./config.ts";
 import { setInstalledToken } from "./shopify.ts";
 
 const SHOP_DOMAIN = /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/;
+const HEX_DIGEST = /^[0-9a-f]{64}$/;
 const STATE_LIFETIME_MS = 10 * 60 * 1000;
+/** One person installing an app needs a handful; the cap keeps a flood of visits from piling up. */
+const MAX_PENDING = 100;
 
 /** Nonces handed out by /auth/install, each good for one callback within ten minutes. */
 const pending = new Map<string, number>();
@@ -39,6 +42,11 @@ export function authorizeUrl(): string {
   const state = randomBytes(16).toString("hex");
 
   for (const [key, expires] of pending) if (expires < Date.now()) pending.delete(key);
+  while (pending.size >= MAX_PENDING) {
+    const oldest = pending.keys().next();
+    if (oldest.done) break;
+    pending.delete(oldest.value);
+  }
   pending.set(state, Date.now() + STATE_LIFETIME_MS);
 
   const params = new URLSearchParams({
@@ -53,7 +61,10 @@ export function authorizeUrl(): string {
 
 /** Shopify signs the callback with the client secret; anything unsigned is not from Shopify. */
 function verifySignature(query: URLSearchParams, secret: string): boolean {
-  const hmac = query.get("hmac") || "";
+  const hmac = (query.get("hmac") || "").toLowerCase();
+  // A digest is 64 hex characters. Anything else would make the byte comparison below throw.
+  if (!HEX_DIGEST.test(hmac)) return false;
+
   const message = [...query.entries()]
     .filter(([key]) => key !== "hmac")
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -61,7 +72,7 @@ function verifySignature(query: URLSearchParams, secret: string): boolean {
     .join("&");
   const digest = createHmac("sha256", secret).update(message).digest("hex");
 
-  return hmac.length === digest.length && timingSafeEqual(Buffer.from(hmac), Buffer.from(digest));
+  return timingSafeEqual(Buffer.from(hmac, "hex"), Buffer.from(digest, "hex"));
 }
 
 /**

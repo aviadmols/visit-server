@@ -87,10 +87,64 @@ function failure(error: unknown): { status: number; body: Record<string, unknown
   }
 
   if (error instanceof ShopifyError) {
-    return { status: 502, body: { error_code: error.code, message: error.message } };
+    // A kit Shopify will not put on an order is the customer's problem to solve, by choosing
+    // another one; retrying the same request would fail the same way for ever.
+    if (error.code === "draft_order_rejected" || error.code === "draft_order_without_invoice") {
+      return {
+        status: 422,
+        body: {
+          error_code: error.code,
+          message: "This kit cannot be ordered right now.",
+          field_errors: { selected_variant_id: "This kit cannot be ordered right now. Please choose another kit." },
+        },
+      };
+    }
+
+    // Shopify's own wording names scopes, fields and throttle state, and the credentials error
+    // even names the install URL. The caller gets the code; the detail stays in the log.
+    return { status: 502, body: { error_code: error.code, message: "The quote could not be created." } };
   }
 
   return { status: 500, body: { error_code: "unknown", message: "The quote could not be created." } };
+}
+
+/**
+ * What the storefront is allowed to ask for, and how often.
+ *
+ * The quiz posts from a browser with no credentials of its own, so the two things that can be
+ * checked are where the request says it comes from and how many have arrived lately. Neither
+ * stops a determined attacker, but together they keep the endpoint from being a free draft
+ * order and free mail sender for anyone who finds the URL.
+ */
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+const seen = new Map<string, number[]>();
+
+function callerKey(request: IncomingMessage): string {
+  const forwarded = String(request.headers["x-forwarded-for"] || "").split(",")[0]?.trim();
+  return forwarded || request.socket.remoteAddress || "unknown";
+}
+
+/** @returns Whether this caller is still within its allowance. */
+function withinRate(key: string): boolean {
+  const now = Date.now();
+  const recent = (seen.get(key) ?? []).filter((at) => now - at < RATE_WINDOW_MS);
+
+  if (recent.length >= config.rateLimitPerWindow) {
+    seen.set(key, recent);
+    return false;
+  }
+
+  recent.push(now);
+  seen.set(key, recent);
+
+  // Callers that have gone quiet are dropped, so the map cannot grow without end.
+  if (seen.size > 5000) {
+    for (const [other, times] of seen) {
+      if (times.every((at) => now - at >= RATE_WINDOW_MS)) seen.delete(other);
+    }
+  }
+
+  return true;
 }
 
 async function submissions(request: IncomingMessage, response: ServerResponse, headers: Record<string, string>): Promise<void> {
@@ -104,7 +158,9 @@ async function submissions(request: IncomingMessage, response: ServerResponse, h
     return;
   }
 
-  const work = handleQuote(body);
+  // The key also tags the draft order, so a retry after an unclear answer finds the quote
+  // Shopify already created instead of creating a second one.
+  const work = handleQuote(body, key);
   if (key) remember(key, work);
 
   try {
@@ -122,15 +178,22 @@ function escapeHtml(text: string): string {
 
 function page(response: ServerResponse, status: number, title: string, body: string): void {
   const html = `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title><body style="font:16px/1.5 system-ui;max-width:40rem;margin:3rem auto;padding:0 1rem"><h1>${escapeHtml(title)}</h1>${body}`;
-  response.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  // The success page shows an Admin API token; no referrer should carry the URL onwards.
+  response.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
   response.end(html);
 }
 
 /** The install handshake: /auth/install sends the owner to Shopify, /auth/callback receives the answer. */
 async function install(path: string, query: URLSearchParams, response: ServerResponse): Promise<boolean> {
   if (path === "/auth/install") {
-    response.writeHead(302, { Location: authorizeUrl(), "Cache-Control": "no-store" });
-    response.end();
+    try {
+      response.writeHead(302, { Location: authorizeUrl(), "Cache-Control": "no-store" });
+      response.end();
+    } catch (error) {
+      // Missing client credentials belong on the install page, not in the quote endpoint's error shape.
+      const message = error instanceof InstallError ? error.message : "The install could not be started.";
+      page(response, 400, "Install unavailable", `<p>${escapeHtml(message)}</p>`);
+    }
     return true;
   }
 
@@ -178,6 +241,20 @@ const server = createServer((request, response) => {
         return;
       }
 
+      // CORS only decides what a browser may read; the work happens either way. So an origin
+      // that is not on the list is turned away here, before a draft order or an email exists.
+      if (config.allowedOrigins.length > 0 && Object.keys(headers).length === 0) {
+        log("origin_refused", { path, origin: String(request.headers.origin || "") });
+        send(response, 403, { error_code: "origin_not_allowed", message: "This service does not answer that origin." }, {});
+        return;
+      }
+
+      if (request.method === "POST" && path === "/api/quiz/submissions" && !withinRate(callerKey(request))) {
+        log("rate_limited", { caller: callerKey(request) });
+        send(response, 429, { error_code: "too_many_requests", message: "Too many quote requests. Please try again later." }, headers);
+        return;
+      }
+
       if (request.method === "POST" && path === "/api/quiz/match") {
         // Nothing to add: the quiz keeps the ranking it worked out in the browser.
         send(response, 200, {}, headers);
@@ -210,11 +287,33 @@ server.listen(config.port, () => {
   );
 });
 
+// A crash that repeats would exhaust Railway's restart budget and leave the service down, so
+// the reason is written down before the process goes.
+for (const event of ["uncaughtException", "unhandledRejection"] as const) {
+  process.on(event, (error: unknown) => {
+    log("service_crashed", { event, message: String(error) });
+    void flushLog().finally(() => process.exit(1));
+  });
+}
+
+let stopping = false;
+
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
+    if (stopping) return;
+    stopping = true;
     log("service_stopping", { signal });
+
     server.close(() => {
-      void flushLog().then(() => process.exit(0));
+      void flushLog().finally(() => process.exit(0));
     });
+
+    // Keep-alive sockets would otherwise hold close() open for their idle timeout, and a stuck
+    // request would hold it until the platform kills the process mid-quote.
+    server.closeIdleConnections();
+    setTimeout(() => {
+      server.closeAllConnections();
+      void flushLog().finally(() => process.exit(0));
+    }, 10000).unref();
   });
 }

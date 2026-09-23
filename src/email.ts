@@ -39,6 +39,13 @@ function transport(): Transporter {
     host: config.mail.host,
     port: config.mail.port,
     secure: config.mail.secure,
+    // Without this, a relay that simply omits STARTTLS gets the password in the clear.
+    requireTLS: !config.mail.secure,
+    tls: { minVersion: "TLSv1.2" },
+    // A relay that accepts the connection and then goes quiet must not hold a quote for minutes.
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
     auth: config.mail.user ? { user: config.mail.user, pass: config.mail.password } : undefined,
   });
 
@@ -51,7 +58,12 @@ function money(value: Money | null): string {
   const amount = Number(value.amount);
   if (!Number.isFinite(amount)) return `${value.amount} ${value.currencyCode}`;
 
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: value.currencyCode }).format(amount);
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: value.currencyCode }).format(amount);
+  } catch {
+    // A currency code Intl does not know must not cost the customer their quote email.
+    return `${amount.toFixed(2)} ${value.currencyCode}`;
+  }
 }
 
 function humanDate(value: string | null, flexible: boolean): string {
@@ -63,10 +75,10 @@ function humanDate(value: string | null, flexible: boolean): string {
   return new Intl.DateTimeFormat("en-US", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(date);
 }
 
-const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"]/g, (character) => ESCAPES[character] ?? character);
+  return value.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
 }
 
 /** One label and value of the quote, under a hairline rule. Empty values are left out. */
@@ -182,23 +194,25 @@ export function renderQuoteEmail(quote: QuoteEmail): string {
 }
 
 export function renderQuoteText(quote: QuoteEmail): string {
+  const details = [
+    `Impact kit: ${quote.kitTitle}`,
+    `Participants: ${quote.participants}`,
+    ...(quote.unitPrice ? [`Per participant: ${money(quote.unitPrice)}`] : []),
+    `Total: ${money(quote.total)}`,
+    `Event date: ${humanDate(quote.eventDate, quote.dateFlexible)}`,
+  ];
+
   return [
     quote.firstName ? `Hi ${quote.firstName},` : "Hi,",
     "",
     `Your quote ${quote.quoteName} is ready to order.`,
     "",
-    `Impact kit: ${quote.kitTitle}`,
-    `Participants: ${quote.participants}`,
-    quote.unitPrice ? `Per participant: ${money(quote.unitPrice)}` : "",
-    `Total: ${money(quote.total)}`,
-    `Event date: ${humanDate(quote.eventDate, quote.dateFlexible)}`,
+    ...details,
     "",
     `Complete the order: ${quote.invoiceUrl}`,
     "",
     config.brand.name,
-  ]
-    .filter((line, index, lines) => line !== "" || lines[index - 1] !== "")
-    .join("\n");
+  ].join("\n");
 }
 
 /** @returns What the relay answered, for the log: delivery beyond the relay is its business. */

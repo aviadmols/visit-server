@@ -61,8 +61,10 @@ async function requestToken(clientId: string, clientSecret: string): Promise<{ t
 
 async function accessToken(): Promise<string> {
   const auth = config.shopify.auth;
-  if ("token" in auth) return auth.token;
+  // An install that just happened is the newer credential, and the page that ran it promised
+  // quotes would work; a token left in the environment may well be the revoked one.
   if (installed) return installed;
+  if ("token" in auth) return auth.token;
 
   if (!issued || Date.now() >= issued.renewAt) {
     // Requests that arrive together share one token request instead of each asking for their own.
@@ -176,6 +178,8 @@ export type DraftOrderRequest = {
   variantId: string;
   quantity: number;
   note: string;
+  /** Tags Shopify can be searched by, on top of the ones in the configuration. */
+  extraTags?: string[];
   /** Shown in admin under the order's additional details. */
   attributes: { key: string; value: string }[];
   /** Line item properties; a key that starts with _ stays hidden from the customer. */
@@ -189,7 +193,7 @@ export async function createDraftOrder(request: DraftOrderRequest): Promise<Draf
       lineItems: [{ variantId: request.variantId, quantity: request.quantity, customAttributes: request.properties }],
       customAttributes: request.attributes,
       note: request.note,
-      tags: config.shopify.draftOrderTags,
+      tags: [...config.shopify.draftOrderTags, ...(request.extraTags ?? [])],
     },
   });
 
@@ -201,6 +205,61 @@ export async function createDraftOrder(request: DraftOrderRequest): Promise<Draf
   if (!draft.invoiceUrl) {
     throw new ShopifyError("draft_order_without_invoice", "The draft order has no invoice URL to pay.");
   }
+
+  const line = draft.lineItems.nodes[0];
+
+  return {
+    id: draft.id,
+    name: draft.name,
+    invoiceUrl: draft.invoiceUrl,
+    total: draft.totalPriceSet.shopMoney,
+    line: line ? { title: line.title, quantity: line.quantity, unitPrice: line.originalUnitPriceSet.shopMoney } : null,
+  };
+}
+
+const DRAFT_ORDER_BY_TAG = `
+  query QuoteByTag($query: String!) {
+    draftOrders(first: 1, query: $query) {
+      nodes {
+        id
+        name
+        invoiceUrl
+        totalPriceSet { shopMoney { amount currencyCode } }
+        lineItems(first: 1) {
+          nodes {
+            title
+            quantity
+            originalUnitPriceSet { shopMoney { amount currencyCode } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Finds a draft order this service already created, by the tag it stamps on each attempt.
+ *
+ * Shopify can accept a draft order and still leave the answer unread, and the storefront
+ * retries with the same key. Without this lookup that retry would create a second quote.
+ *
+ * @returns The draft order, or null when this attempt never reached Shopify.
+ */
+export async function findDraftOrderByTag(tag: string): Promise<DraftOrder | null> {
+  const data = await graphql<{
+    draftOrders: {
+      nodes: {
+        id: string;
+        name: string;
+        invoiceUrl: string | null;
+        totalPriceSet: { shopMoney: Money };
+        lineItems: { nodes: { title: string; quantity: number; originalUnitPriceSet: { shopMoney: Money } }[] };
+      }[];
+    };
+  }>(DRAFT_ORDER_BY_TAG, { query: `tag:'${tag.replace(/['\\]/g, "")}'` });
+
+  const draft = data.draftOrders.nodes[0];
+  if (!draft?.invoiceUrl) return null;
 
   const line = draft.lineItems.nodes[0];
 
@@ -246,7 +305,8 @@ const CUSTOMER_BY_EMAIL = `
 /** @returns The customer's id, or null when this email has never bought or signed up. */
 export async function findCustomerId(email: string): Promise<string | null> {
   const data = await graphql<{ customers: { nodes: { id: string }[] } }>(CUSTOMER_BY_EMAIL, {
-    query: `email:"${email.replace(/"/g, "")}"`,
+    // A quote and a backslash both end the quoted term early, so neither reaches the query.
+    query: `email:"${email.replace(/["\\]/g, "")}"`,
   });
 
   return data.customers.nodes[0]?.id ?? null;
